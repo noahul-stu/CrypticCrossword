@@ -1,0 +1,59 @@
+{
+  "splits": {
+    "train": {
+      "unique_clues": 474950,
+      "source_rows_consumed": 476216,
+      "from_cryptonite_only": 469547,
+      "from_wordplay_only": 5253,
+      "from_both_sources": 150,
+      "with_wordplay_annotation": 5403,
+      "quick": 37256,
+      "with_alt_answers": 51,
+      "publishers": {
+        "Times": 277939,
+        "Telegraph": 191608,
+        "FT": 5224,
+        "Guardian": 179
+      }
+    },
+    "val": {
+      "unique_clues": 26387,
+      "source_rows_consumed": 26456,
+      "from_cryptonite_only": 26087,
+      "from_wordplay_only": 290,
+      "from_both_sources": 10,
+      "with_wordplay_annotation": 300,
+      "quick": 2111,
+      "with_alt_answers": 0,
+      "publishers": {
+        "Times": 15439,
+        "Telegraph": 10648,
+        "FT": 294,
+        "Guardian": 6
+      }
+    },
+    "test": {
+      "unique_clues": 26082,
+      "source_rows_consumed": 26157,
+      "from_cryptonite_only": 26082,
+      "from_wordplay_only": 0,
+      "from_both_sources": 0,
+      "with_wordplay_annotation": 0,
+      "quick": 2069,
+      "with_alt_answers": 0,
+      "publishers": {
+        "Times": 15372,
+        "Telegraph": 10710
+      }
+    }
+  },
+  "totals": {
+    "unique_clues": 527419,
+    "source_rows_consumed": 528829,
+    "rows_dropped_as_duplicates": 1410,
+    "answer_conflicts": 51,
+    "enumeration_conflicts": 59,
+    "cross_split_duplicates_dropped": 11,
+    "with_wordplay_annotation": 5703
+  }
+}
