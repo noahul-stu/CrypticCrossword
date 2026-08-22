@@ -1,0 +1,177 @@
+#!/bin/bash
+#SBATCH --job-name=deberta-wordplay
+#SBATCH --output=slurm_logs/%x-%j.out
+#SBATCH --error=slurm_logs/%x-%j.err
+#SBATCH --partition=studentkillable
+#SBATCH --requeue
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=16G
+#SBATCH --time=01:00:00
+
+# Runs one of the "without finetuning" DeBERTa notebooks end-to-end on a GPU
+# node of the TAU CS Slurm cluster.  Submit from the repository root:
+#
+#     sbatch run_deberta_slurm_bySize.sbatch small   # microsoft/deberta-v3-small
+#     sbatch run_deberta_slurm_bySize.sbatch large   # microsoft/deberta-v3-large
+#     sbatch run_deberta_slurm_bySize.sbatch         # defaults to large
+#
+# --time is sized for `large` (bigger cold download, 24 layers).  `small`
+# finishes well inside it; shorten with
+# `sbatch --time=00:30:00 run_deberta_slurm_bySize.sbatch small` if you want to
+# be scheduled sooner on a busy queue.
+#
+# Notes from the course guidelines (NLP_course_2025b___project_guidelines.pdf, 2.2):
+#   * partition is `studentkillable` -> jobs are preemptible, hence --requeue.
+#     The notebooks are pure inference, so a restart from scratch is cheap and safe.
+#   * fill in https://www.cs.tau.ac.il/system/SlurmRequestForm before the first run
+#     (PI/lab: "NLP class 2025/2026"); cluster docs: https://www.cs.tau.ac.il/system/slurm
+#   * venv / HF cache / datasets belong on the course storage, not in $HOME.
+
+set -euo pipefail
+
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$PROJECT_DIR"
+
+# figures/ and outputs/ are only written later, so creating them here is fine.
+# slurm_logs/ is different: Slurm opens the --output/--error paths above when it
+# launches the job step, i.e. BEFORE this script runs, so this mkdir cannot save
+# a missing slurm_logs/ - the job would already have died with "Unable to open
+# file". That is why slurm_logs/.gitkeep is committed, so the directory exists
+# straight after a clone. The mkdir stays for local `bash` runs outside Slurm.
+mkdir -p slurm_logs figures outputs
+
+# --- model size selection -------------------------------------------------
+# First positional argument wins, then $MODEL_SIZE from the environment, then
+# the `large` default.
+MODEL_SIZE="${1:-${MODEL_SIZE:-large}}"
+
+case "$MODEL_SIZE" in
+    small)
+        MODEL_NAME="microsoft/deberta-v3-small"
+        NOTEBOOK="code/DeBERTa_Slurm_small_Wordplay_without_finetuning.ipynb"
+        ;;
+    large)
+        MODEL_NAME="microsoft/deberta-v3-large"
+        NOTEBOOK="code/DeBERTa_Slurm_large_Wordplay_without_finetuning.ipynb"
+        ;;
+    *)
+        echo "ERROR: unknown model size '$MODEL_SIZE' (expected 'small' or 'large')" >&2
+        exit 2
+        ;;
+esac
+
+if [ ! -f "$NOTEBOOK" ]; then
+    echo "ERROR: notebook not found: $PROJECT_DIR/$NOTEBOOK" >&2
+    exit 2
+fi
+
+OUT_NOTEBOOK="outputs/DeBERTa_${MODEL_SIZE}_Wordplay_${SLURM_JOB_ID:-local}.ipynb"
+
+echo "Model size:   $MODEL_SIZE"
+echo "Model name:   $MODEL_NAME"
+echo "Notebook:     $NOTEBOOK"
+echo "Output:       $OUT_NOTEBOOK"
+
+# --- storage --------------------------------------------------------------
+# Persistent (not backed-up) course storage. Falls back to the project dir when
+# running somewhere else, e.g. a laptop.
+STORAGE_ROOT="${STORAGE_ROOT:-/home/morg/NLP_2526b/$USER}"
+if [ ! -d "$STORAGE_ROOT" ]; then
+    echo "WARNING: $STORAGE_ROOT not found, keeping venv and caches under $PROJECT_DIR"
+    STORAGE_ROOT="$PROJECT_DIR"
+fi
+
+export HF_HOME="$STORAGE_ROOT/.cache/huggingface"
+export XDG_CACHE_HOME="$STORAGE_ROOT/.cache"
+export PIP_CACHE_DIR="$STORAGE_ROOT/.cache/pip"
+export PREBUILT_DIR="$PROJECT_DIR/cryptic-wordplay-main/prebuilt"
+export FIG_DIR="$PROJECT_DIR/figures"
+export TOKENIZERS_PARALLELISM=false
+export HF_HUB_DISABLE_PROGRESS_BARS=1
+mkdir -p "$HF_HOME" "$PIP_CACHE_DIR"
+
+# cryptic-wordplay-main/ is gitignored (re-downloadable). Without it the
+# notebook falls back to raw.githubusercontent.com, which a firewalled compute
+# node cannot reach - so say so loudly here rather than failing mid-notebook.
+if [ ! -d "$PREBUILT_DIR" ]; then
+    echo "WARNING: $PREBUILT_DIR not found."
+    echo "         The notebook will try to read the prebuilt jsonl files from GitHub."
+    echo "         If the compute node has no outbound HTTP, clone the data first:"
+    echo "           git clone --depth 1 https://github.com/mdda/cryptic-wordplay \\"
+    echo "               $PROJECT_DIR/cryptic-wordplay-main"
+fi
+
+# Both deberta-v3 checkpoints are public and ungated, so no HF token is
+# required. A token only raises the download rate limit; drop one in
+# ~/.hf_token to use it.
+if [ -f "$HOME/.hf_token" ]; then
+    export HF_TOKEN="$(cat "$HOME/.hf_token")"
+fi
+
+# --- environment ---------------------------------------------------------
+module load cuda 2>/dev/null || true
+
+VENV="$STORAGE_ROOT/venvs/deberta-wordplay"
+if [ ! -d "$VENV" ]; then
+    python3 -m venv "$VENV"
+fi
+source "$VENV/bin/activate"
+
+# Installed on every run so the job is self-contained; pip is a no-op once the
+# packages are cached in $VENV.  The notebook's own !pip cell repeats this.
+pip install -q -U pip
+pip install -q -U torch transformers datasets sentencepiece \
+    pandas numpy matplotlib jupyter nbconvert ipykernel
+
+# --- run -----------------------------------------------------------------
+nvidia-smi || true
+
+# Each notebook hardcodes its own MODEL_NAME. Check it against the case branch
+# above before spending a download on it, so the two can never drift apart and
+# silently report the wrong model's numbers.
+MODEL_NAME="$MODEL_NAME" NOTEBOOK="$NOTEBOOK" python - <<'PY'
+import json, os, re, sys
+
+expected = os.environ["MODEL_NAME"]
+nb = json.load(open(os.environ["NOTEBOOK"]))
+
+found = [
+    m.group(1)
+    for cell in nb["cells"]
+    if cell["cell_type"] == "code"
+    for m in [re.search(r'^MODEL_NAME\s*=\s*["\'](.+?)["\']', "".join(cell["source"]), re.M)]
+    if m
+]
+
+if found != [expected]:
+    sys.exit(
+        f"ERROR: {os.environ['NOTEBOOK']} sets MODEL_NAME={found}, "
+        f"but this job selected {expected!r}."
+    )
+print("MODEL_NAME matches notebook:", expected)
+PY
+
+# Download the weights before the notebook starts, so a node without a route to
+# huggingface.co fails here with a clear error instead of hanging mid-notebook.
+# Once the cache is warm you can add:  export HF_HUB_OFFLINE=1
+MODEL_NAME="$MODEL_NAME" python - <<'PY'
+import os
+
+from transformers import AutoModel, AutoTokenizer
+
+MODEL_NAME = os.environ["MODEL_NAME"]
+AutoTokenizer.from_pretrained(MODEL_NAME)
+AutoModel.from_pretrained(MODEL_NAME)
+print("Model cached:", MODEL_NAME)
+PY
+
+jupyter nbconvert \
+    --to notebook \
+    --execute \
+    --ExecutePreprocessor.timeout=-1 \
+    --output "$PROJECT_DIR/$OUT_NOTEBOOK" \
+    "$NOTEBOOK"
+
+echo "Executed notebook written to $OUT_NOTEBOOK"
+echo "Figures written to $FIG_DIR"
