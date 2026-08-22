@@ -51,18 +51,19 @@ The `reports/` files are left as plain `.jsonl` so they render in GitHub's web U
 Output is byte-reproducible: gzip's mtime field is pinned to 0, so rebuilding
 unchanged data yields identical files and creates no new git blobs.
 
-Verify the shipped data at any time (works without the source files):
+Verify the shipped data at any time (works without the source files). Run from
+the repository root:
 
 ```bash
-python3 verify_dataset.py
+python3 united-cryptonite-wordplay-dataset/verify_dataset.py
 ```
 
-To rebuild from scratch, place both source folders next to this repository —
-`cryptonite-official-split/` and `cryptic-wordplay-main/`, either inside it or in
-its parent directory; the script finds either layout — then run:
+To rebuild from scratch, place both source folders — `cryptonite-official-split/`
+and `cryptic-wordplay-main/` — either in this folder or at the repository root;
+the script finds either layout. Then run:
 
 ```bash
-python3 build_united_dataset.py
+python3 united-cryptonite-wordplay-dataset/build_united_dataset.py
 ```
 
 **Neither source dataset is committed here.** Both are gitignored:

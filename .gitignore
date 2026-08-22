@@ -40,10 +40,10 @@ outputs/
 # ------------------------------------------- Uncompressed dataset splits (BIG)
 # The dataset ships gzipped. Plain train.jsonl is 205 MB, over GitHub's 100 MB
 # per-file limit, and committing it once already made this repo unpushable.
-# These rules are anchored to the repo root so reports/*.jsonl still commits.
-/train.jsonl
-/val.jsonl
-/test.jsonl
+# Anchored to the dataset folder so reports/*.jsonl still commits.
+/united-cryptonite-wordplay-dataset/train.jsonl
+/united-cryptonite-wordplay-dataset/val.jsonl
+/united-cryptonite-wordplay-dataset/test.jsonl
 
 # --------------------------------------------------- Third-party source datasets
 # Not committed: re-downloadable, and cryptonite-train.jsonl is 102 MB.
@@ -57,8 +57,8 @@ cryptic-wordplay-main/
 
 # ==============================================================================
 # Deliberately COMMITTED, do not add ignore rules for these:
-#   train.jsonl.gz  val.jsonl.gz  test.jsonl.gz     (19.8 / 1.2 / 1.1 MB)
-#   reports/*.jsonl                                  (audit trail, 0.4 MB)
+#   united-cryptonite-wordplay-dataset/*.jsonl.gz    (18.6 / 1.1 / 1.1 MB)
+#   united-cryptonite-wordplay-dataset/reports/*.jsonl   (audit trail, 0.4 MB)
 #   stats.json  build_united_dataset.py  verify_dataset.py  README.md  code/
 # The rules above are anchored or path-scoped on purpose - a bare `*.jsonl` or
 # `*.gz` rule would silently swallow the dataset itself.
