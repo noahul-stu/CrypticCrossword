@@ -11,20 +11,70 @@ Built by `build_united_dataset.py`; every invariant below is checked by
 
 | File | Rows | Size | What it is |
 |---|---|---|---|
-| `train.jsonl` | 474,950 | 205 MB | Training clues |
-| `val.jsonl` | 26,387 | 11 MB | Validation clues |
-| `test.jsonl` | 26,082 | 11 MB | Test clues (Cryptonite-only, no wordplay annotations) |
+| `train.jsonl.gz` | 474,950 | 18.6 MB | Training clues |
+| `val.jsonl.gz` | 26,387 | 1.1 MB | Validation clues |
+| `test.jsonl.gz` | 26,082 | 1.1 MB | Test clues (Cryptonite-only, no wordplay annotations) |
 | `stats.json` | — | — | Machine-readable counts per split |
 | `build_united_dataset.py` | — | — | Reproducible build; rerun to regenerate everything |
 | `verify_dataset.py` | — | — | Asserts all invariants; exits non-zero on failure |
-| `reports/*.jsonl` | 1,691 | — | Full audit trail of everything dropped or in conflict |
+| `reports/*.jsonl` | 1,691 | 0.4 MB | Full audit trail of everything dropped or in conflict |
 
-Regenerate from the two source folders (run from their shared parent directory):
+### Reading the data
+
+The splits are gzipped: `train.jsonl` is 205 MB plain, which exceeds GitHub's
+100 MB per-file limit, and 18.6 MB compressed. Decompression is transparent in
+every common loader — there is no unpacking step.
+
+```python
+import gzip, json
+rows = [json.loads(l) for l in gzip.open("train.jsonl.gz", "rt", encoding="utf-8")]
+
+import pandas as pd                                    # infers gzip from the suffix
+df = pd.read_json("train.jsonl.gz", lines=True)
+
+from datasets import load_dataset
+ds = load_dataset("json", data_files={"train": "train.jsonl.gz",
+                                      "validation": "val.jsonl.gz",
+                                      "test": "test.jsonl.gz"})
+```
+
+From the shell, `gunzip -c` works everywhere (macOS `zcat` does not — BSD `zcat`
+looks for `.Z` files and errors out; use `gzcat` there, or `zcat` on Linux):
 
 ```bash
-python3 united-cryptonite-wordplay-dataset/build_united_dataset.py
-python3 united-cryptonite-wordplay-dataset/verify_dataset.py
+gunzip -c train.jsonl.gz | head -2
+zgrep -c '"wordplay": null' train.jsonl.gz     # zgrep is fine on both
 ```
+
+The `reports/` files are left as plain `.jsonl` so they render in GitHub's web UI.
+
+Output is byte-reproducible: gzip's mtime field is pinned to 0, so rebuilding
+unchanged data yields identical files and creates no new git blobs.
+
+Verify the shipped data at any time (works without the source files):
+
+```bash
+python3 verify_dataset.py
+```
+
+To rebuild from scratch, place both source folders next to this repository —
+`cryptonite-official-split/` and `cryptic-wordplay-main/`, either inside it or in
+its parent directory; the script finds either layout — then run:
+
+```bash
+python3 build_united_dataset.py
+```
+
+**Neither source dataset is committed here.** Both are gitignored:
+`cryptonite-train.jsonl` alone is 102 MB, over GitHub's 100 MB per-file limit,
+and both are third-party and re-downloadable. The `.jsonl.gz` splits in this repo
+are all you need for training and evaluation — the sources are only needed to
+*rebuild*. Fetch them from
+[github.com/aviaefrat/cryptonite](https://github.com/aviaefrat/cryptonite) and
+[github.com/mdda/cryptic-wordplay](https://github.com/mdda/cryptic-wordplay).
+
+To emit uncompressed `.jsonl` instead, set `COMPRESS_SPLITS = False` in
+`build_united_dataset.py`; both scripts follow that switch.
 
 ## Composition
 
@@ -49,10 +99,9 @@ One JSON object per line, fields always present and in this order:
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | str | `"train-000001"`, unique within the file |
-| `split` | str | `train` / `val` / `test` |
+| `id` | str | `"train-000001"`; the prefix identifies the split |
 | `clue` | str | **Cryptonite style**: lowercased, enumeration appended inline, no `{}` markers |
-| `answer` | str | Lowercased; may contain spaces (`"running buffet"`) |
+| `answer` | str | The solution, lowercased; may contain spaces (`"running buffet"`) |
 | `enumeration` | str | `"(4,2)"` — Cryptonite style, commas only |
 | `orientation` | str/null | `across` / `down` |
 | `number` | int/null | Clue number in the grid |
@@ -62,16 +111,29 @@ One JSON object per line, fields always present and in this order:
 | `setter` | str/null | Puzzle compiler |
 | `quick` | bool | Quick-crossword variant |
 | `wordplay` | str/null | The human breakdown, e.g. `"DA (lawyer) + T[ribunal] in SEE (diocese)"` |
-| `clue_with_definition` | str/null | Original-case clue with definition spans in `{}` |
-| `wordplay_author` | str/null | Annotator (`teacow` throughout this sample) |
-| `enumeration_raw` | str | As-published; keeps hyphens (`"(4-2)"`) that `enumeration` folds to commas |
+| `comment` | str/null | Free-text annotator note; on 107 rows only. Sometimes carries the actual decomposition where `wordplay` is just a label like `"Double Definition"` |
+| `clue_with_definition` | str/null | Original-case clue with the **definition** spans in `{}` |
+| `enumeration_raw` | str/null | Set on 126 rows only, where the published form was hyphenated: `"(4-2)"` = one hyphenated word, vs `enumeration`'s `"(4,2)"` = two words. Null when it would just repeat `enumeration` |
 | `sources` | list | `["cryptonite"]`, `["wordplay"]`, or both |
 | `alt_answers` | list | Other answers published for this same clue text (see conflicts below) |
-| `n_source_rows` | int | How many source rows collapsed into this record |
+
+All 5,703 wordplay breakdowns are by a single annotator (`teacow`), so there is no
+per-row annotator field — it would be a constant. `enumeration` is recoverable
+from the `clue` suffix; it is kept as a separate field because Cryptonite ships it
+that way and parsing the suffix is a nuisance.
+
+`{}` in `clue_with_definition` marks the **definition** — the words inside the clue
+that point to the answer — not the answer itself. In
+`"Apart from starter, cooking hailed as {perfect}"` the definition is `perfect`
+and the answer is `ideal`. Two braced spans means a double definition, where each
+half defines the answer independently. Neither source dataset has a field named
+`solution`; both call it `answer`, and that name is kept here.
 
 Get the reasoning-annotated subset with a filter — no separate file needed:
 
 ```python
+import gzip, json
+rows = [json.loads(l) for l in gzip.open("train.jsonl.gz", "rt", encoding="utf-8")]
 annotated = [r for r in rows if r["wordplay"]]     # 5,703 clues across train+val
 ```
 

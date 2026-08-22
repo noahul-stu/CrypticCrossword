@@ -1,0 +1,11 @@
+{"clue_key": "stockholder", "kept_in_split": "train", "dropped_from_split": "val", "kept_clue": "stockholder? (11)", "dropped_clue": "stock-holder (6,3)", "dropped_answer": "cattle pen"}
+{"clue_key": "dispatchnote", "kept_in_split": "train", "dropped_from_split": "val", "kept_clue": "dispatch note (5,7)", "dropped_clue": "dispatch note? (3,4)", "dropped_answer": "hit list"}
+{"clue_key": "writersblock", "kept_in_split": "train", "dropped_from_split": "val", "kept_clue": "writer's block? (7)", "dropped_clue": "writers' block? (7)", "dropped_answer": "bookend"}
+{"clue_key": "tosleepperchancetodream", "kept_in_split": "train", "dropped_from_split": "test", "kept_clue": "to sleep, perchance to dream? (10)", "dropped_clue": "\"to sleep: perchance to dream: - - \" (2,6,3,3)", "dropped_answer": "ay theres the rub"}
+{"clue_key": "revoltinganimalsweresostubborn", "kept_in_split": "train", "dropped_from_split": "test", "kept_clue": "revolting animals were so stubborn? (9)", "dropped_clue": "revolting animals were so stubborn (3,6)", "dropped_answer": "pig headed"}
+{"clue_key": "birdheadlesschicken", "kept_in_split": "train", "dropped_from_split": "test", "kept_clue": "bird, headless chicken (5)", "dropped_clue": "bird - headless chicken? (3)", "dropped_answer": "owl"}
+{"clue_key": "hideworkersoldmoney", "kept_in_split": "train", "dropped_from_split": "test", "kept_clue": "hide worker's old money (6)", "dropped_clue": "hide workers' old money (7)", "dropped_answer": "tanners"}
+{"clue_key": "notagoodlooker", "kept_in_split": "train", "dropped_from_split": "test", "kept_clue": "not a good-looker! (4,3)", "dropped_clue": "not a good looker! (5,3)", "dropped_answer": "glass eye"}
+{"clue_key": "acoursefornondrivers", "kept_in_split": "train", "dropped_from_split": "test", "kept_clue": "a course for non-drivers (8)", "dropped_clue": "a course for non-drivers? (4)", "dropped_answer": "path"}
+{"clue_key": "birdheadlesschicken", "kept_in_split": "train", "dropped_from_split": "test", "kept_clue": "bird, headless chicken (5)", "dropped_clue": "bird headless chicken? (3)", "dropped_answer": "owl"}
+{"clue_key": "holysmokeitcouldberesponsible", "kept_in_split": "train", "dropped_from_split": "test", "kept_clue": "holy smoke! it could be responsible (6)", "dropped_clue": "holy smoke, it could be responsible! (7,6)", "dropped_answer": "incense burner"}

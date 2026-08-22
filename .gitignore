@@ -1,0 +1,65 @@
+# ---------------------------------------------------------------- OS / editors
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
+*.swp
+*~
+.idea/
+.vscode/
+
+# ---------------------------------------------------------------------- Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+venv/
+.venv/
+env/
+ENV/
+
+# ------------------------------------------------------------ ML run artifacts
+checkpoints/
+runs/
+wandb/
+outputs/
+*.ckpt
+*.pt
+*.safetensors
+
+# ------------------------------------------- Uncompressed dataset splits (BIG)
+# The dataset ships gzipped. Plain train.jsonl is 205 MB, over GitHub's 100 MB
+# per-file limit, and committing it once already made this repo unpushable.
+# These rules are anchored to the repo root so reports/*.jsonl still commits.
+/train.jsonl
+/val.jsonl
+/test.jsonl
+
+# --------------------------------------------------- Third-party source datasets
+# Not committed: re-downloadable, and cryptonite-train.jsonl is 102 MB.
+#   Cryptonite : https://github.com/aviaefrat/cryptonite
+#   Wordplay   : https://github.com/mdda/cryptic-wordplay
+cryptonite-official-split/
+cryptic-wordplay-main/
+
+# ------------------------------------------------------------- Local tool state
+.claude/settings.local.json
+
+# ==============================================================================
+# Deliberately COMMITTED, do not add ignore rules for these:
+#   train.jsonl.gz  val.jsonl.gz  test.jsonl.gz     (19.8 / 1.2 / 1.1 MB)
+#   reports/*.jsonl                                  (audit trail, 0.4 MB)
+#   stats.json  build_united_dataset.py  verify_dataset.py  README.md  code/
+# The rules above are anchored or path-scoped on purpose - a bare `*.jsonl` or
+# `*.gz` rule would silently swallow the dataset itself.
+# ==============================================================================

@@ -7,6 +7,8 @@
       "from_wordplay_only": 5253,
       "from_both_sources": 150,
       "with_wordplay_annotation": 5403,
+      "with_annotator_comment": 99,
+      "with_hyphenated_enumeration": 121,
       "quick": 37256,
       "with_alt_answers": 51,
       "publishers": {
@@ -23,6 +25,8 @@
       "from_wordplay_only": 290,
       "from_both_sources": 10,
       "with_wordplay_annotation": 300,
+      "with_annotator_comment": 8,
+      "with_hyphenated_enumeration": 5,
       "quick": 2111,
       "with_alt_answers": 0,
       "publishers": {
@@ -39,6 +43,8 @@
       "from_wordplay_only": 0,
       "from_both_sources": 0,
       "with_wordplay_annotation": 0,
+      "with_annotator_comment": 0,
+      "with_hyphenated_enumeration": 0,
       "quick": 2069,
       "with_alt_answers": 0,
       "publishers": {

@@ -1,53 +1,68 @@
 #!/usr/bin/env python3
-"""Build the united Cryptonite + Wordplay cryptic-crossword dataset.
+"""Build the united Cryptonite + Wordplay dataset.
 
-Run from the parent directory that holds `cryptonite-official-split/` and
-`cryptic-wordplay-main/`:
+    python3 build_united_dataset.py
 
-    python3 united-cryptonite-wordplay-dataset/build_united_dataset.py
-
-Build decisions (see README.md for the rationale):
-  * Full union of both sources, one unified schema.
-  * `clue` is rendered in Cryptonite style: lowercased, definition `{}` markers
-    stripped, enumeration appended inline.
-  * Deduplication is by normalized clue text and is GLOBAL, with split
-    precedence train > val > test, so a clue text appears exactly once in the
-    whole dataset.
-  * Nothing is silently discarded: every dropped row is written to reports/.
+Union of both sources in one schema. Clues are rendered Cryptonite-style
+(lowercase, enumeration inline, no `{}`). Dedup is by normalized clue text and
+is global, with split precedence train > val > test. Every dropped row lands in
+reports/.
 """
 
 import collections
+import gzip
 import json
 import os
 import re
 import unicodedata
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
+
+
+def _find_source_root():
+    """Find the directory holding the source folders; they may be beside or above."""
+    for candidate in (os.path.dirname(HERE), HERE,
+                      os.path.dirname(os.path.dirname(HERE))):
+        if os.path.isdir(os.path.join(candidate, "cryptonite-official-split")):
+            return candidate
+    return os.path.dirname(HERE)
+
+
+ROOT = _find_source_root()
 CN = os.path.join(ROOT, "cryptonite-official-split", "cryptonite-%s.jsonl")
 WP = os.path.join(ROOT, "cryptic-wordplay-main", "prebuilt", "sample_teacow_%s.jsonl")
 REPORTS = os.path.join(HERE, "reports")
 
-SPLITS = ["train", "val", "test"]  # order matters: dedup precedence
+SPLITS = ["train", "val", "test"]   # order is the dedup precedence
+
+# Plain train.jsonl is 205 MB, over GitHub's 100 MB limit; gzipped it is 19.7 MB.
+COMPRESS_SPLITS = True
 
 ENUM_RE = re.compile(r"\s*\(([\d,\-\s]*)\)\s*$")
 
 
-# ---------------------------------------------------------------- normalization
+def sources_available():
+    return all(os.path.exists(CN % split) for split in ("train", "val", "test"))
+
+
+def split_filename(split):
+    return "%s.jsonl.gz" % split if COMPRESS_SPLITS else "%s.jsonl" % split
+
+
+# --- normalization ---
 
 def _unify(text):
-    """NFKC + fold the unicode punctuation variants that differ between sources."""
+    """Fold the unicode punctuation variants that differ between the sources."""
     s = unicodedata.normalize("NFKC", text)
     for a, b in (("’", "'"), ("‘", "'"), ("“", '"'), ("”", '"'),
-                 ("–", "-"), ("—", "-"), ("−", "-"), (" ", " ")):
+                 ("–", "-"), ("—", "-"), ("−", "-"), (" ", " ")):
         s = s.replace(a, b)
-    # Source artifact: one Cryptonite clue encodes a comma as '{cm}'.
-    s = s.replace("{cm}", ",")
+    s = s.replace("{cm}", ",")      # one Cryptonite clue encodes a comma this way
     return re.sub(r"\s+", " ", s).strip()
 
 
 def clue_words(clue, strip_braces):
-    """Soft-normalized clue: no {} markers, no trailing enumeration, lowercase."""
+    """Clue without {} markers, trailing enumeration, or case."""
     s = _unify(clue)
     if strip_braces:
         s = s.replace("{", "").replace("}", "")
@@ -56,7 +71,7 @@ def clue_words(clue, strip_braces):
 
 
 def dedup_key(clue, strip_braces):
-    """Punctuation-insensitive key: alphanumerics of the clue, enumeration excluded."""
+    """Alphanumerics of the clue. Punctuation-insensitive, enumeration excluded."""
     return re.sub(r"[^a-z0-9]+", "", clue_words(clue, strip_braces))
 
 
@@ -65,18 +80,15 @@ def norm_answer(answer):
 
 
 def to_cryptonite_enumeration(pattern):
-    """Wordplay `pattern` ('7-2-3', '11,3') -> Cryptonite enumeration ('(7,2,3)').
+    """'7-2-3' -> '(7,2,3)'. Cryptonite never hyphenates, so fold to commas.
 
-    Cryptonite never uses hyphens in enumerations (verified: 0 of 1,588 forms),
-    so hyphens are folded to commas. The original is preserved separately.
-    Braces are stripped first: one Wordplay row has a definition marker that
-    leaked into its `pattern` field ('{8}').
+    Braces are stripped first: one Wordplay row has '{8}' as its pattern.
     """
     cleaned = pattern.replace("{", "").replace("}", "").strip()
     return "(%s)" % re.sub(r"[-\s]+", ",", cleaned)
 
 
-# ------------------------------------------------------------------- record I/O
+# --- source rows -> united rows ---
 
 PUBLICATION_MAP = {
     "financial-times": ("FT", "Financial Times"),
@@ -90,22 +102,21 @@ def blank_to_none(value):
 
 
 def from_cryptonite(row, split):
-    clue = _unify(row["clue"])
     enumeration = _unify(row["enumeration"])
     return {
-        "clue": clue.lower(),
+        "clue": _unify(row["clue"]).lower(),
         "answer": _unify(row["answer"]).lower(),
         "enumeration": enumeration,
-        "enumeration_raw": enumeration,
+        "enumeration_raw": None,       # Cryptonite is already in canonical form
         "clue_with_definition": None,
         "wordplay": None,
-        "wordplay_author": None,
+        "comment": None,
         "orientation": blank_to_none(row.get("orientation")),
         "number": row.get("number"),
         "publisher": blank_to_none(row.get("publisher")),
         "sub_publisher": blank_to_none(row.get("sub_publisher")),
         "date": row.get("date"),
-        "setter": blank_to_none(row.get("author")),
+        "setter": blank_to_none(row.get("author")),   # their `author` is the setter
         "quick": bool(row.get("quick")),
         "sources": ["cryptonite"],
         "split": split,
@@ -117,22 +128,25 @@ def from_wordplay(row, split):
     marked = _unify(row["clue"])                      # keeps {} and original case
     bare = marked.replace("{", "").replace("}", "")
     enumeration = to_cryptonite_enumeration(row["pattern"])
-    raw_enum = "(%s)" % row["pattern"].replace("{", "").replace("}", "").strip()
+    raw = "(%s)" % row["pattern"].replace("{", "").replace("}", "").strip()
     publisher, sub_publisher = PUBLICATION_MAP.get(
         row.get("publication"), (blank_to_none(row.get("publication")), None))
     return {
         "clue": ("%s %s" % (bare.lower(), enumeration)).strip(),
         "answer": _unify(row["answer"]).lower(),
         "enumeration": enumeration,
-        "enumeration_raw": raw_enum,
+        # Only kept when it differs, i.e. when the answer is hyphenated.
+        "enumeration_raw": raw if raw != enumeration else None,
         "clue_with_definition": marked,
         "wordplay": _unify(row["wordplay"]) or None,
-        "wordplay_author": blank_to_none(row.get("author")),
+        # On 107 rows only. Sometimes holds the decomposition when `wordplay` is
+        # just a label like "Double Definition".
+        "comment": blank_to_none(_unify(row.get("comment") or "")),
         "orientation": {"A": "across", "D": "down"}.get(row.get("ad")),
         "number": row.get("num"),
         "publisher": publisher,
         "sub_publisher": sub_publisher,
-        "date": None,
+        "date": None,                                 # this source has no dates
         "setter": blank_to_none(row.get("setter")),
         "quick": bool(row.get("is_quick")),
         "sources": ["wordplay"],
@@ -141,8 +155,11 @@ def from_wordplay(row, split):
     }
 
 
+# --- io ---
+
 def read_jsonl(path):
-    with open(path, encoding="utf-8") as handle:
+    opener = gzip.open if path.endswith(".gz") else open
+    with opener(path, "rt", encoding="utf-8") as handle:
         for line in handle:
             line = line.strip()
             if line:
@@ -150,20 +167,30 @@ def read_jsonl(path):
 
 
 def write_jsonl(path, rows):
-    with open(path, "w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    """Write .jsonl, or .jsonl.gz when the path says so.
+
+    gzip mtime is pinned to 0 so an unchanged rebuild produces identical bytes
+    and no new git blob.
+    """
+    body = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows)
+    if path.endswith(".gz"):
+        with open(path, "wb") as raw:
+            with gzip.GzipFile(fileobj=raw, mode="wb", compresslevel=9,
+                               mtime=0) as handle:
+                handle.write(body.encode("utf-8"))
+    else:
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(body)
 
 
-# --------------------------------------------------------------------- merging
+# --- merging ---
 
-FIELDS_FROM_DONOR = ("clue_with_definition", "wordplay", "wordplay_author",
-                     "orientation", "number", "publisher", "sub_publisher",
-                     "date", "setter")
+FIELDS_FROM_DONOR = ("clue_with_definition", "wordplay", "comment", "orientation",
+                     "number", "publisher", "sub_publisher", "date", "setter")
 
 
 def merge_metadata(primary, donor):
-    """Fill gaps in `primary` from `donor` (same clue AND same answer only)."""
+    """Fill gaps in primary from donor. Callers must check the answers match."""
     for field in FIELDS_FROM_DONOR:
         if primary.get(field) in (None, "") and donor.get(field) not in (None, ""):
             primary[field] = donor[field]
@@ -173,13 +200,10 @@ def merge_metadata(primary, donor):
 
 
 def pick_primary(rows, split):
-    """Choose the surviving row for a clue group.
+    """Pick the survivor of a clue group.
 
-    Only rows belonging to `split` are eligible: the split precedence is
-    train > val > test, so a duplicate found in a later split must never
-    replace the earlier split's record. Among eligible rows, prefer one with a
-    wordplay breakdown (it justifies the answer), then the earliest date, then
-    first seen.
+    Only rows from `split` are eligible, so a duplicate in a later split can
+    never displace the earlier one. Prefer an annotated row, then the earliest.
     """
     eligible = [(i, r) for i, r in enumerate(rows) if r["split"] == split]
 
@@ -194,7 +218,6 @@ def pick_primary(rows, split):
 def main():
     os.makedirs(REPORTS, exist_ok=True)
 
-    # ---- load ------------------------------------------------------------
     loaded = {}
     for split in SPLITS:
         rows = [from_cryptonite(r, split) for r in read_jsonl(CN % split)]
@@ -204,15 +227,14 @@ def main():
         loaded[split] = rows
         print("loaded %-5s : %d rows" % (split, len(rows)))
 
-    # ---- group by clue key, globally, honouring split precedence ----------
-    groups = collections.OrderedDict()   # key -> {"split": s, "rows": [...]}
+    # Group by clue key across all splits, earliest split wins.
+    groups = collections.OrderedDict()
     cross_split = []
     for split in SPLITS:
         for row in loaded[split]:
             key = dedup_key(row["clue"], strip_braces=False)
             if not key:
-                # Punctuation-only clues are real (Cryptonite has '? (8)' ->
-                # 'clueless'); key them on the punctuation so they survive.
+                # Punctuation-only clues are real: Cryptonite has '? (8)' -> clueless.
                 key = "punct:" + clue_words(row["clue"], False)
             if key in groups:
                 group = groups[key]
@@ -227,7 +249,6 @@ def main():
             else:
                 groups[key] = {"split": split, "rows": [row]}
 
-    # ---- collapse each group to one record --------------------------------
     united = {s: [] for s in SPLITS}
     dropped, answer_conflicts, enum_conflicts = [], [], []
 
@@ -243,8 +264,6 @@ def main():
             same_answer = norm_answer(row["answer"]) == primary_answer
             same_split = row["split"] == group["split"]
             if same_answer and same_split:
-                # Only merge metadata within a split; a cross-split duplicate is
-                # discarded outright so the official split boundaries are exact.
                 merge_metadata(primary, row)
             elif not same_answer and same_split:
                 if row["answer"] not in alt_answers:
@@ -252,6 +271,8 @@ def main():
             if (same_split and row["enumeration"] != primary["enumeration"]
                     and row["enumeration"] not in alt_enums):
                 alt_enums.append(row["enumeration"])
+            # Cross-split rows contribute nothing: merging or listing their
+            # answers would leak val/test content into train.
             dropped.append({
                 "clue_key": key,
                 "reason": ("cross_split_duplicate" if not same_split else
@@ -272,31 +293,33 @@ def main():
         if alt_enums:
             enum_conflicts.append({
                 "clue_key": key, "clue": primary["clue"],
-                "kept_enumeration": primary["enumeration"], "alt_enumerations": alt_enums,
+                "kept_enumeration": primary["enumeration"],
+                "alt_enumerations": alt_enums,
             })
 
         primary["alt_answers"] = alt_answers
-        primary["n_source_rows"] = len(rows)
         united[group["split"]].append(primary)
 
-    # ---- stamp ids and write ---------------------------------------------
-    field_order = ["id", "split", "clue", "answer", "enumeration", "orientation",
-                   "number", "publisher", "sub_publisher", "date", "setter",
-                   "quick", "wordplay", "clue_with_definition", "wordplay_author",
-                   "enumeration_raw", "sources", "alt_answers", "n_source_rows"]
+    # `split` is internal only: the filename and the id prefix both carry it.
+    field_order = ["id", "clue", "answer", "enumeration", "orientation", "number",
+                   "publisher", "sub_publisher", "date", "setter", "quick",
+                   "wordplay", "comment", "clue_with_definition",
+                   "enumeration_raw", "sources", "alt_answers"]
     for split in SPLITS:
         for index, row in enumerate(united[split], start=1):
             row["id"] = "%s-%06d" % (split, index)
-        write_jsonl(os.path.join(HERE, "%s.jsonl" % split),
-                    [{k: row[k] for k in field_order} for row in united[split]])
-        print("wrote %-5s.jsonl : %d unique clues" % (split, len(united[split])))
+        path = os.path.join(HERE, split_filename(split))
+        write_jsonl(path, [{k: row[k] for k in field_order} for row in united[split]])
+        print("wrote %-16s : %6d unique clues, %5.1f MB"
+              % (split_filename(split), len(united[split]),
+                 os.path.getsize(path) / 1048576.0))
 
     write_jsonl(os.path.join(REPORTS, "dropped_duplicate_rows.jsonl"), dropped)
     write_jsonl(os.path.join(REPORTS, "answer_conflicts.jsonl"), answer_conflicts)
     write_jsonl(os.path.join(REPORTS, "enumeration_conflicts.jsonl"), enum_conflicts)
     write_jsonl(os.path.join(REPORTS, "cross_split_duplicates.jsonl"), cross_split)
 
-    # ---- overlap report: the clues that existed in BOTH sources -----------
+    # How exactly the two sources agreed on the clues they shared.
     overlap = []
     for split in SPLITS:
         for row in united[split]:
@@ -318,7 +341,6 @@ def main():
                             "exactness": verdict})
     write_jsonl(os.path.join(REPORTS, "source_overlap.jsonl"), overlap)
 
-    # ---- stats -----------------------------------------------------------
     stats = {"splits": {}, "totals": {}}
     for split in SPLITS:
         rows = united[split]
@@ -329,6 +351,8 @@ def main():
             "from_wordplay_only": sum(1 for r in rows if r["sources"] == ["wordplay"]),
             "from_both_sources": sum(1 for r in rows if len(r["sources"]) > 1),
             "with_wordplay_annotation": sum(1 for r in rows if r["wordplay"]),
+            "with_annotator_comment": sum(1 for r in rows if r["comment"]),
+            "with_hyphenated_enumeration": sum(1 for r in rows if r["enumeration_raw"]),
             "quick": sum(1 for r in rows if r["quick"]),
             "with_alt_answers": sum(1 for r in rows if r["alt_answers"]),
             "publishers": dict(collections.Counter(r["publisher"] for r in rows).most_common()),
