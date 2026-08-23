@@ -34,6 +34,7 @@ runs/
 wandb/
 outputs/
 figures/
+figures-without-finetuning/
 # Slurm opens --output/--error before the job script runs, so slurm_logs/ must
 # already exist at submit time - a `mkdir -p` inside the script is too late.
 # Keep the directory itself tracked, ignore the logs written into it.

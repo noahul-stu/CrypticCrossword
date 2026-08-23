@@ -95,7 +95,7 @@ cd "$PROJECT_DIR"
 # launches the job step, i.e. BEFORE this script runs, so this mkdir cannot save
 # a missing slurm_logs/ - the job would already have died with "Unable to open
 # file". Create it by hand once, or keep a committed slurm_logs/.gitkeep.
-mkdir -p slurm_logs figures outputs
+mkdir -p slurm_logs outputs
 
 # --- model size selection -------------------------------------------------
 # First positional argument wins, then $MODEL_SIZE from the environment, then
@@ -162,7 +162,11 @@ export HF_HOME="$STORAGE_ROOT/.cache/huggingface"
 export XDG_CACHE_HOME="$STORAGE_ROOT/.cache"
 export PIP_CACHE_DIR="$STORAGE_ROOT/.cache/pip"
 export PREBUILT_DIR="$PROJECT_DIR/cryptic-wordplay-main/prebuilt"
-export FIG_DIR="$PROJECT_DIR/figures"
+# Per-size figure directory. The notebook always writes the same two filenames
+# (score_distributions.png, margin_distribution.png), so a shared directory means
+# whichever job finishes last silently overwrites the other's plots.
+export FIG_DIR="$PROJECT_DIR/figures-without-finetuning/$MODEL_SIZE"
+mkdir -p "$FIG_DIR"
 export TOKENIZERS_PARALLELISM=false
 export HF_HUB_DISABLE_PROGRESS_BARS=1
 
