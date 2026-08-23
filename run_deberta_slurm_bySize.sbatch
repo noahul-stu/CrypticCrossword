@@ -165,7 +165,19 @@ export PREBUILT_DIR="$PROJECT_DIR/cryptic-wordplay-main/prebuilt"
 export FIG_DIR="$PROJECT_DIR/figures"
 export TOKENIZERS_PARALLELISM=false
 export HF_HUB_DISABLE_PROGRESS_BARS=1
-mkdir -p "$HF_HOME" "$PIP_CACHE_DIR"
+
+# $HOME on this cluster is small and goes over quota, and several tools write
+# there by default - nbconvert died with
+#   OSError: [Errno 122] Disk quota exceeded: '~/.ipython'
+# because IPython creates its directory before a kernel can start. Redirect
+# every one of them onto the course storage.
+export IPYTHONDIR="$STORAGE_ROOT/.ipython"                  # IPython  ~/.ipython
+export JUPYTER_CONFIG_DIR="$STORAGE_ROOT/.jupyter"          # jupyter  ~/.jupyter
+export JUPYTER_DATA_DIR="$STORAGE_ROOT/.jupyter/data"       # kernelspecs
+export JUPYTER_RUNTIME_DIR="$STORAGE_ROOT/.jupyter/runtime" # kernel connection files
+export MPLCONFIGDIR="$STORAGE_ROOT/.cache/matplotlib"       # font cache
+mkdir -p "$HF_HOME" "$PIP_CACHE_DIR" "$IPYTHONDIR" "$JUPYTER_CONFIG_DIR" \
+    "$JUPYTER_DATA_DIR" "$JUPYTER_RUNTIME_DIR" "$MPLCONFIGDIR"
 
 # cryptic-wordplay-main/ is gitignored (re-downloadable). Without it the
 # notebook falls back to raw.githubusercontent.com, which a firewalled compute
