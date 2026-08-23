@@ -7,7 +7,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
-#SBATCH --time=01:00:00
+#SBATCH --time=02:00:00
 
 # Runs one of the "without finetuning" DeBERTa notebooks end-to-end on a GPU
 # node of the TAU CS Slurm cluster.  Submit from the repository root:
@@ -16,10 +16,13 @@
 #     sbatch run_deberta_slurm_bySize.sbatch large   # microsoft/deberta-v3-large
 #     sbatch run_deberta_slurm_bySize.sbatch         # defaults to large
 #
-# --time is sized for `large` (bigger cold download, 24 layers).  `small`
-# finishes well inside it; shorten with
-# `sbatch --time=00:30:00 run_deberta_slurm_bySize.sbatch small` if you want to
-# be scheduled sooner on a busy queue.
+# The two sizes are independent (separate venvs, separate output notebooks), so
+# both can be queued at the same time and may run concurrently.
+#
+# --time is sized for a COLD run: creating the venv and downloading the CUDA
+# torch wheel (~2.5GB) dominates, and costs far more than the model itself. Once
+# a size's venv and HF cache are warm, a rerun finishes in minutes:
+#   `sbatch --time=00:30:00 run_deberta_slurm_bySize.sbatch small` is then plenty.
 #
 # Notes from the course guidelines (NLP_course_2025b___project_guidelines.pdf, 2.2):
 #   * partition is `studentkillable` -> jobs are preemptible, hence --requeue.
@@ -127,11 +130,20 @@ fi
 # --- environment ---------------------------------------------------------
 module load cuda 2>/dev/null || true
 
-VENV="$STORAGE_ROOT/venvs/deberta-wordplay"
+# One venv per size. The two jobs are meant to be queued together, and on
+# studentkillable they can start hours apart or at the same moment - two
+# concurrent `python3 -m venv` + `pip install` runs against one directory can
+# leave a half-written environment and produce confusing import errors. Separate
+# venvs cost ~2.5GB extra on course storage and remove the race entirely.
+# HF_HOME stays shared: the two sizes fetch different repos, and huggingface_hub
+# takes file locks around its downloads.
+VENV="$STORAGE_ROOT/venvs/deberta-wordplay-$MODEL_SIZE"
 if [ ! -d "$VENV" ]; then
     python3 -m venv "$VENV"
 fi
 source "$VENV/bin/activate"
+
+echo "Virtualenv:   $VENV"
 
 # Installed on every run so the job is self-contained; pip is a no-op once the
 # packages are cached in $VENV.  The notebook's own !pip cell repeats this.
