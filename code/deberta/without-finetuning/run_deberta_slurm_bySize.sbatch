@@ -123,7 +123,10 @@ esac
 if [ -n "${NOTEBOOK:-}" ]; then
     :
 else
-    for candidate in "code/$NOTEBOOK_NAME" "$NOTEBOOK_NAME" "notebooks/$NOTEBOOK_NAME"; do
+    for candidate in "$NOTEBOOK_NAME" \
+                     "code/deberta/without-finetuning/$NOTEBOOK_NAME" \
+                     "code/$NOTEBOOK_NAME" \
+                     "notebooks/$NOTEBOOK_NAME"; do
         if [ -f "$candidate" ]; then
             NOTEBOOK="$candidate"
             break
@@ -133,7 +136,7 @@ fi
 
 if [ -z "${NOTEBOOK:-}" ] || [ ! -f "$NOTEBOOK" ]; then
     echo "ERROR: could not find $NOTEBOOK_NAME under $PROJECT_DIR" >&2
-    echo "       Looked in: code/  ./  notebooks/" >&2
+    echo "       Looked in: ./  code/deberta/without-finetuning/  code/  notebooks/" >&2
     echo "       Notebooks actually present here:" >&2
     find . -maxdepth 2 -name '*.ipynb' -not -path './outputs/*' 2>/dev/null \
         | sed 's/^/         /' >&2 || true
