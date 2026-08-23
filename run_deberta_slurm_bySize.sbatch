@@ -139,26 +139,58 @@ fi
 # --- environment ---------------------------------------------------------
 module load cuda 2>/dev/null || true
 
-# One venv per size. The two jobs are meant to be queued together, and on
-# studentkillable they can start hours apart or at the same moment - two
-# concurrent `python3 -m venv` + `pip install` runs against one directory can
-# leave a half-written environment and produce confusing import errors. Separate
-# venvs cost ~2.5GB extra on course storage and remove the race entirely.
-# HF_HOME stays shared: the two sizes fetch different repos, and huggingface_hub
-# takes file locks around its downloads.
-VENV="$STORAGE_ROOT/venvs/deberta-wordplay-$MODEL_SIZE"
-if [ ! -d "$VENV" ]; then
-    python3 -m venv "$VENV"
-fi
-source "$VENV/bin/activate"
+# The compute nodes' system python3.12 ships without ensurepip (python3.12-venv
+# is not installed, and `apt install` needs sudo we do not have), so
+# `python3 -m venv` fails there with "ensurepip is not available". Reuse a
+# pre-built environment instead of trying to create one.
+# Override with VENV=/path/to/venv when submitting.
+VENV="${VENV:-$STORAGE_ROOT/venv}"
 
+if [ ! -x "$VENV/bin/python" ]; then
+    echo "ERROR: no usable virtualenv at $VENV" >&2
+    echo "       This script cannot create one: the compute nodes' python3 has no" >&2
+    echo "       ensurepip, so 'python3 -m venv' fails there." >&2
+    echo "       Build it once on a node that can, then resubmit; or point at an" >&2
+    echo "       existing one:  VENV=/path/to/venv sbatch ... $MODEL_SIZE" >&2
+    exit 2
+fi
+
+source "$VENV/bin/activate"
 echo "Virtualenv:   $VENV"
 
-# Installed on every run so the job is self-contained; pip is a no-op once the
-# packages are cached in $VENV.  The notebook's own !pip cell repeats this.
-pip install -q -U pip
-pip install -q -U torch transformers datasets sentencepiece \
-    pandas numpy matplotlib jupyter nbconvert ipykernel
+# SKIP_PIP=1 is the default because $VENV is shared between the small and large
+# jobs. Neither job writes to it, so both can run concurrently and safely. The
+# notebook's own install cell reads this variable too, for the same reason.
+# Set SKIP_PIP=0 to let this job install/upgrade - only do that with one job
+# running at a time.
+SKIP_PIP="${SKIP_PIP:-1}"
+export SKIP_PIP
+
+if [ "$SKIP_PIP" = "1" ]; then
+    echo "SKIP_PIP=1  -> using $VENV as-is, installing nothing"
+else
+    pip install -q -U pip
+    pip install -q -U torch transformers datasets sentencepiece \
+        pandas numpy matplotlib nbconvert nbclient ipykernel
+fi
+
+# Fail fast with the exact pip command to run, rather than dying deep inside
+# nbconvert or halfway through the notebook.
+python - <<'PY'
+import importlib.util as u, sys
+
+needed = ["torch", "transformers", "datasets", "pandas", "numpy",
+          "matplotlib", "sentencepiece", "nbconvert", "nbclient", "ipykernel"]
+missing = [m for m in needed if u.find_spec(m) is None]
+
+if missing:
+    sys.exit(
+        "ERROR: this venv is missing: " + " ".join(missing) + "\n"
+        "       Install them once, on the login node:\n"
+        "         " + sys.prefix + "/bin/pip install -U " + " ".join(missing)
+    )
+print("Dependencies OK.")
+PY
 
 # --- run -----------------------------------------------------------------
 nvidia-smi || true
@@ -202,7 +234,9 @@ AutoModel.from_pretrained(MODEL_NAME)
 print("Model cached:", MODEL_NAME)
 PY
 
-jupyter nbconvert \
+# `python -m nbconvert` rather than `jupyter nbconvert`, so the run does not
+# depend on the jupyter_core launcher being installed in the reused venv.
+python -m nbconvert \
     --to notebook \
     --execute \
     --ExecutePreprocessor.timeout=-1 \
