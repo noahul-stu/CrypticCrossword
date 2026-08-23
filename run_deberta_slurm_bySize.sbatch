@@ -10,18 +10,67 @@
 #SBATCH --time=02:00:00
 
 # Runs one of the "without finetuning" DeBERTa notebooks end-to-end on a GPU
-# node of the TAU CS Slurm cluster.  Submit from the repository root:
+# node of the TAU CS Slurm cluster.  Submit from the directory holding the
+# notebooks:
 #
 #     sbatch run_deberta_slurm_bySize.sbatch small   # microsoft/deberta-v3-small
 #     sbatch run_deberta_slurm_bySize.sbatch large   # microsoft/deberta-v3-large
 #     sbatch run_deberta_slurm_bySize.sbatch         # defaults to large
 #
-# The two sizes are independent (separate venvs, separate output notebooks), so
-# both can be queued at the same time and may run concurrently.
+# The two sizes share one venv but never write to it (SKIP_PIP=1) and write
+# different output notebooks, so both can be queued at once and run concurrently.
 #
-# --time is sized for a COLD run: creating the venv and downloading the CUDA
-# torch wheel (~2.5GB) dominates, and costs far more than the model itself. Once
-# a size's venv and HF cache are warm, a rerun finishes in minutes:
+# ==========================================================================
+# ONE-TIME SETUP - run these on the LOGIN node, not inside a job
+# ==========================================================================
+# The compute nodes' system python3.12 has no ensurepip, so `python3 -m venv`
+# fails there. The venv must already exist; this script only activates it.
+#
+#   1. Python packages. Everything the notebooks and this script need:
+#
+#        torch          transformers    datasets      pandas    numpy
+#        sentencepiece  protobuf        matplotlib
+#        nbconvert      nbclient        ipykernel
+#
+#      sentencepiece AND protobuf are both required, not just the first:
+#      deberta-v3 ships its tokenizer as a SentencePiece spm.model, and
+#      transformers needs protobuf to parse it into the fast-tokenizer format.
+#      Without protobuf it falls back to a TikToken extractor and dies on a
+#      missing tiktoken. nbconvert/nbclient/ipykernel are what execute the
+#      notebook; matplotlib draws the section-15 figures.
+#
+#        cd /home/morg/NLP_2526b/$USER
+#        venv/bin/pip install -U torch transformers datasets pandas numpy \
+#            sentencepiece protobuf matplotlib nbconvert nbclient ipykernel
+#
+#      Verify (should print nothing missing):
+#        venv/bin/python -c "import torch,transformers,datasets,pandas,numpy,\
+#        sentencepiece,google.protobuf,nbconvert,nbclient,ipykernel; print('ok')"
+#
+#   2. The Wordplay data. Without it the notebook falls back to GitHub at run
+#      time; a local copy is faster and works on a firewalled node:
+#
+#        git clone --depth 1 https://github.com/mdda/cryptic-wordplay \
+#            /home/morg/NLP_2526b/$USER/cryptic-wordplay-main
+#
+#   3. The log directory. Slurm opens --output/--error BEFORE this script runs,
+#      so the mkdir below cannot create it in time:
+#
+#        mkdir -p /home/morg/NLP_2526b/$USER/slurm_logs
+#
+#   4. Optional - warm the model cache, so the job does not download anything:
+#
+#        HF_HOME=$PWD/.cache/huggingface venv/bin/python -c "
+#        from transformers import AutoModel, AutoTokenizer
+#        for m in ['microsoft/deberta-v3-small', 'microsoft/deberta-v3-large']:
+#            AutoTokenizer.from_pretrained(m); AutoModel.from_pretrained(m)"
+#
+# This script's dependency preflight checks item 1 and prints the exact pip
+# command for anything missing, so a bad environment fails in seconds.
+# ==========================================================================
+#
+# --time is sized for a COLD run, where the HF download dominates (~0.3GB for
+# small, ~1.7GB for large). Once the cache is warm a rerun takes minutes:
 #   `sbatch --time=00:30:00 run_deberta_slurm_bySize.sbatch small` is then plenty.
 #
 # Notes from the course guidelines (NLP_course_2025b___project_guidelines.pdf, 2.2):
@@ -170,18 +219,42 @@ if [ "$SKIP_PIP" = "1" ]; then
     echo "SKIP_PIP=1  -> using $VENV as-is, installing nothing"
 else
     pip install -q -U pip
-    pip install -q -U torch transformers datasets sentencepiece \
+    pip install -q -U torch transformers datasets sentencepiece protobuf \
         pandas numpy matplotlib nbconvert nbclient ipykernel
 fi
 
 # Fail fast with the exact pip command to run, rather than dying deep inside
 # nbconvert or halfway through the notebook.
 python - <<'PY'
-import importlib.util as u, sys
+import importlib.util, sys
 
-needed = ["torch", "transformers", "datasets", "pandas", "numpy",
-          "matplotlib", "sentencepiece", "nbconvert", "nbclient", "ipykernel"]
-missing = [m for m in needed if u.find_spec(m) is None]
+# module name -> pip name. protobuf is not optional: deberta-v3 ships a
+# SentencePiece spm.model, and transformers needs protobuf to convert it to the
+# fast tokenizer format. Without it, it falls back to a TikToken extractor and
+# dies on a missing tiktoken instead.
+needed = {
+    "torch": "torch",
+    "transformers": "transformers",
+    "datasets": "datasets",
+    "pandas": "pandas",
+    "numpy": "numpy",
+    "matplotlib": "matplotlib",
+    "sentencepiece": "sentencepiece",
+    "google.protobuf": "protobuf",
+    "nbconvert": "nbconvert",
+    "nbclient": "nbclient",
+    "ipykernel": "ipykernel",
+}
+
+
+def present(module):
+    try:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ModuleNotFoundError, ValueError):
+        return False
+
+
+missing = sorted({pip for mod, pip in needed.items() if not present(mod)})
 
 if missing:
     sys.exit(
