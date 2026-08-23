@@ -41,22 +41,11 @@ set -euo pipefail
 PROJECT_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 cd "$PROJECT_DIR"
 
-# Slurm resolves --output/--error relative to the submit dir, so a wrong
-# PROJECT_DIR otherwise shows up as a confusing permission error rather than as
-# "you submitted from the wrong place".
-if [ ! -d code ]; then
-    echo "ERROR: $PROJECT_DIR is not the CrypticCrossword repo root (no code/ directory)." >&2
-    echo "       Submit from the repo root, e.g.:" >&2
-    echo "         cd ~/CrypticCrossword && sbatch run_deberta_slurm_bySize.sbatch large" >&2
-    exit 2
-fi
-
 # figures/ and outputs/ are only written later, so creating them here is fine.
 # slurm_logs/ is different: Slurm opens the --output/--error paths above when it
 # launches the job step, i.e. BEFORE this script runs, so this mkdir cannot save
 # a missing slurm_logs/ - the job would already have died with "Unable to open
-# file". That is why slurm_logs/.gitkeep is committed, so the directory exists
-# straight after a clone. The mkdir stays for local `bash` runs outside Slurm.
+# file". Create it by hand once, or keep a committed slurm_logs/.gitkeep.
 mkdir -p slurm_logs figures outputs
 
 # --- model size selection -------------------------------------------------
@@ -67,11 +56,11 @@ MODEL_SIZE="${1:-${MODEL_SIZE:-large}}"
 case "$MODEL_SIZE" in
     small)
         MODEL_NAME="microsoft/deberta-v3-small"
-        NOTEBOOK="code/DeBERTa_Slurm_small_Wordplay_without_finetuning.ipynb"
+        NOTEBOOK_NAME="DeBERTa_Slurm_small_Wordplay_without_finetuning.ipynb"
         ;;
     large)
         MODEL_NAME="microsoft/deberta-v3-large"
-        NOTEBOOK="code/DeBERTa_Slurm_large_Wordplay_without_finetuning.ipynb"
+        NOTEBOOK_NAME="DeBERTa_Slurm_large_Wordplay_without_finetuning.ipynb"
         ;;
     *)
         echo "ERROR: unknown model size '$MODEL_SIZE' (expected 'small' or 'large')" >&2
@@ -79,8 +68,28 @@ case "$MODEL_SIZE" in
         ;;
 esac
 
-if [ ! -f "$NOTEBOOK" ]; then
-    echo "ERROR: notebook not found: $PROJECT_DIR/$NOTEBOOK" >&2
+# Look for the notebook in the repo layout (code/) and in a flat layout, so the
+# script works whether it sits in a clone of the repo or in a plain working
+# directory on the cluster. Override with NOTEBOOK=/path/to/nb.ipynb.
+if [ -n "${NOTEBOOK:-}" ]; then
+    :
+else
+    for candidate in "code/$NOTEBOOK_NAME" "$NOTEBOOK_NAME" "notebooks/$NOTEBOOK_NAME"; do
+        if [ -f "$candidate" ]; then
+            NOTEBOOK="$candidate"
+            break
+        fi
+    done
+fi
+
+if [ -z "${NOTEBOOK:-}" ] || [ ! -f "$NOTEBOOK" ]; then
+    echo "ERROR: could not find $NOTEBOOK_NAME under $PROJECT_DIR" >&2
+    echo "       Looked in: code/  ./  notebooks/" >&2
+    echo "       Notebooks actually present here:" >&2
+    find . -maxdepth 2 -name '*.ipynb' -not -path './outputs/*' 2>/dev/null \
+        | sed 's/^/         /' >&2 || true
+    echo "       Either submit from the directory holding the notebook, or pass" >&2
+    echo "       an explicit path:  NOTEBOOK=/full/path/nb.ipynb sbatch ... $MODEL_SIZE" >&2
     exit 2
 fi
 
