@@ -30,8 +30,23 @@
 
 set -euo pipefail
 
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# sbatch copies this script to a node-local spool directory before running it,
+# so "${BASH_SOURCE[0]}" is /var/spool/slurmd/job*/slurm_script and NOT the repo
+# - cd-ing there and mkdir-ing gives "Permission denied". $SLURM_SUBMIT_DIR is
+# the directory sbatch was invoked from; fall back to the script's own location
+# for local `bash run_deberta_slurm_bySize.sbatch` runs outside Slurm.
+PROJECT_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 cd "$PROJECT_DIR"
+
+# Slurm resolves --output/--error relative to the submit dir, so a wrong
+# PROJECT_DIR otherwise shows up as a confusing permission error rather than as
+# "you submitted from the wrong place".
+if [ ! -d code ]; then
+    echo "ERROR: $PROJECT_DIR is not the CrypticCrossword repo root (no code/ directory)." >&2
+    echo "       Submit from the repo root, e.g.:" >&2
+    echo "         cd ~/CrypticCrossword && sbatch run_deberta_slurm_bySize.sbatch large" >&2
+    exit 2
+fi
 
 # figures/ and outputs/ are only written later, so creating them here is fine.
 # slurm_logs/ is different: Slurm opens the --output/--error paths above when it
