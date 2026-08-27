@@ -27,7 +27,7 @@ from transformers.trainer_utils import get_last_checkpoint
 # ==========================================
 # TOGGLE THIS TO FALSE FOR THE REAL RUN
 # ==========================================
-DEBUG_MODE = True
+DEBUG_MODE = False
 # ==========================================
 
 print(f"Starting Script. DEBUG_MODE is {DEBUG_MODE}")
@@ -100,66 +100,114 @@ def preprocess_function(examples):
     model_inputs = tokenizer(inputs, max_length=128, truncation=True)
     labels = tokenizer(targets, max_length=32, truncation=True)
     model_inputs["labels"] = labels["input_ids"]
+
+    # Debug prints MUST come before the return statement
+    if DEBUG_MODE and len(model_inputs["input_ids"]) > 0:
+        print("\n--- DATA PREPROCESSING CHECK ---")
+        print(f"DECODED INPUT: {tokenizer.decode(model_inputs['input_ids'][0])}")
+        print(f"DECODED TARGET: {tokenizer.decode([t for t in labels['input_ids'][0] if t != -100])}")
+        print("--------------------------------\n")
+
     return model_inputs
 
-
+# NOTE: remove_columns is required here. Without it, the original string/bool
+# columns ("clue", "answer", "enumeration", "quick") stay in the dataset
+# alongside the new tokenized fields. The default Trainer.get_train_dataloader
+# strips unused columns automatically, but TokenBudgetSeq2SeqTrainer below
+# overrides get_train_dataloader and does NOT do this -- so without
+# remove_columns, collation crashes trying to tensorize the leftover string
+# columns ("Unable to create tensor...").
 if DEBUG_MODE:
     print("Truncating dataset for sanity check...")
-    train_dataset = dataset["train"].select(range(50)).map(preprocess_function, batched=True)
-    eval_dataset = dataset["validation"].select(range(50)).map(preprocess_function, batched=True)
+    train_dataset = dataset["train"].select(range(50)).map(
+        preprocess_function,
+        batched=True,
+        remove_columns=dataset["train"].column_names,
+    )
+    eval_dataset = dataset["validation"].select(range(50)).map(
+        preprocess_function,
+        batched=True,
+        remove_columns=dataset["validation"].column_names,
+    )
 else:
-    train_dataset = dataset["train"].map(preprocess_function, batched=True)
-    eval_dataset = dataset["validation"].map(preprocess_function, batched=True)
+    train_dataset = dataset["train"].map(
+        preprocess_function,
+        batched=True,
+        remove_columns=dataset["train"].column_names,
+    )
+    eval_dataset = dataset["validation"].map(
+        preprocess_function,
+        batched=True,
+        remove_columns=dataset["validation"].column_names,
+    )
 
 data_collator = DataCollatorForSeq2Seq(tokenizer, model=model, label_pad_token_id=-100)
 
 
 def compute_metrics(eval_preds):
     preds, labels = eval_preds
+    preds = np.where(preds != -100, preds, tokenizer.pad_token_id)
     labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
     decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
     decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
     exact_matches = sum(
         1 for p, l in zip(decoded_preds, decoded_labels) if p.strip().lower() == l.strip().lower()
     )
+    if DEBUG_MODE and len(decoded_preds) > 0:
+        print("\n--- MODEL PREDICTION CHECK ---")
+        print(f"MODEL GUESSED: {decoded_preds[0]}")
+        print(f"ACTUAL TARGET: {decoded_labels[0]}")
+        print("------------------------------\n")
     return {"exact_match_accuracy": exact_matches / len(decoded_preds)}
 
 
 # ------------------------------------------------------------------
 # Token-budget batch sampler, approximating the paper's "batch size
-# of 7000 tokens"
+# of 7000 tokens".
+#
+# Batches are built from a LENGTH-SORTED index order (not a random shuffle
+# of raw indices). Packing similar-length examples together keeps padding
+# waste low within each batch -- with a random order, one long clue can
+# land in a batch with many short ones and force everything up to its
+# length, which can blow the real (padded) memory footprint well past the
+# nominal token budget and cause CUDA OOM on the very first step. Batch
+# *order* is still shuffled each epoch, just not batch *contents*.
 # ------------------------------------------------------------------
 class TokenBudgetBatchSampler(Sampler):
-    def __init__(self, lengths, token_budget=7000, shuffle=True):
+    def __init__(self, lengths, token_budget=4000, shuffle=True):
         self.lengths = lengths
         self.token_budget = token_budget
         self.shuffle = shuffle
 
-    def __iter__(self):
-        indices = list(range(len(self.lengths)))
-        if self.shuffle:
-            random.shuffle(indices)
-        batch, running = [], 0
-        for idx in indices:
+    def _build_batches(self):
+        sorted_indices = sorted(range(len(self.lengths)), key=lambda i: self.lengths[i])
+        batches, batch, running = [], [], 0
+        for idx in sorted_indices:
             n = self.lengths[idx]
             if batch and running + n > self.token_budget:
-                yield batch
+                batches.append(batch)
                 batch, running = [], 0
             batch.append(idx)
             running += n
         if batch:
+            batches.append(batch)
+        return batches
+
+    def __iter__(self):
+        batches = self._build_batches()
+        if self.shuffle:
+            random.shuffle(batches)  # shuffle batch order, not contents
+        for batch in batches:
             yield batch
 
     def __len__(self):
-        avg_len = sum(self.lengths) / max(len(self.lengths), 1)
-        per_batch = max(int(self.token_budget / avg_len), 1)
-        return max(len(self.lengths) // per_batch, 1)
+        return len(self._build_batches())
 
 
 class TokenBudgetSeq2SeqTrainer(Seq2SeqTrainer):
     def get_train_dataloader(self):
         lengths = [len(ex["input_ids"]) + len(ex["labels"]) for ex in self.train_dataset]
-        sampler = TokenBudgetBatchSampler(lengths, token_budget=7000, shuffle=True)
+        sampler = TokenBudgetBatchSampler(lengths, token_budget=4000, shuffle=True)
         return DataLoader(
             self.train_dataset,
             batch_sampler=sampler,
@@ -167,12 +215,22 @@ class TokenBudgetSeq2SeqTrainer(Seq2SeqTrainer):
         )
 
 
-output_directory = "/home/morg/NLP_2526b/hullernoa/output_model"
+# Debug and real runs write to SEPARATE output directories. Sharing one
+# directory lets a stray debug checkpoint (different config, different
+# step count) get picked up by get_last_checkpoint() on a later real run,
+# silently resuming from the wrong weights/optimizer state.
+output_directory = (
+    "/home/morg/NLP_2526b/hullernoa/output_model_debug"
+    if DEBUG_MODE
+    else "/home/morg/NLP_2526b/hullernoa/output_model"
+)
+
 training_args = Seq2SeqTrainingArguments(
     output_dir=output_directory,
     optim="adafactor",
     learning_rate=0.001,
     lr_scheduler_type="constant",
+    gradient_checkpointing=True,  # trade compute for activation memory -- needed given ~11-12GB cards
 
     max_steps=5 if DEBUG_MODE else -1,
     num_train_epochs=1 if DEBUG_MODE else 1000,
@@ -188,7 +246,7 @@ training_args = Seq2SeqTrainingArguments(
     predict_with_generate=True,
     generation_num_beams=5,
     generation_max_length=32,
-    report_to="none" if DEBUG_MODE else "wandb",
+    report_to="none",
     bf16=torch.cuda.is_bf16_supported() if not DEBUG_MODE else False,  # safer than fp16 for T5
 )
 
