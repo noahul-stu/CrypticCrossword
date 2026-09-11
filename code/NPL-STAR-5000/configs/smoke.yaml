@@ -1,0 +1,47 @@
+# Smoke test: proves the pipeline runs end to end on a laptop in a few minutes.
+# The numbers it produces are meaningless - it exists to catch shape and
+# plumbing bugs before you queue a cluster job.
+#
+#   python -m cryptic_star.star_loop -c configs/base.yaml -c configs/smoke.yaml
+
+data:
+  # Only ~1.1% of train rows carry a human rationale, and they are not spread
+  # evenly: the first 40k rows contain exactly 7 of them. That is enough to
+  # smoke-test the warm start (it trains, on 7 examples) and nothing more - the
+  # numbers this config produces are plumbing evidence, not results. Reading 40k
+  # gzipped lines is cheap; generation cost is capped by train_subsample.
+  limit_train: 40000
+  limit_val: 200
+  limit_test: 200
+  train_subsample: 120
+
+format:
+  max_source_len: 80
+  max_target_len: 96
+
+generate:
+  n_samples: 5         # bottom of the proposal's 5-20 range
+  batch_size: 4
+  max_new_tokens: 64
+
+train:
+  model_name: google/flan-t5-small
+  epochs: 1.0
+  batch_size: 4
+  grad_accum: 1
+
+star:
+  iterations: 1
+  out_dir: runs/smoke
+
+eval:
+  split: val
+  limit: 50
+  num_beams: 2
+  batch_size: 4
+
+tracking:
+  # A smoke run is only a handful of optimizer steps, so log every one of them -
+  # otherwise the training curves are empty and the tracking is not smoke-tested.
+  log_steps: 1
+  trace_samples: 6

@@ -1,0 +1,23 @@
+torch>=2.1
+# The cluster reference environment installs transformers 5.x, which is what
+# train.py is tested against. 4.x still works: the Trainer arguments that moved
+# between the two (evaluation_strategy/eval_strategy, tokenizer/processing_class,
+# warmup_ratio/warmup_steps) are resolved from the signature at runtime.
+transformers>=4.44
+datasets>=2.19
+accelerate>=0.30
+sentencepiece>=0.1.99
+# Needed to convert a SentencePiece spiece.model into the fast-tokenizer format.
+# Without it transformers falls back to a TikToken extractor and fails on a
+# missing tiktoken, which reads as an unrelated error.
+protobuf>=4.25
+PyYAML>=6.0
+pytest>=8.0
+# Training curves for `tensorboard --logdir runs/<name>/tb`. Optional: without
+# it the run still writes runs/<name>/metrics.jsonl and only logs a warning.
+tensorboard>=2.16
+
+# Only needed when train.use_lora / train.load_in_4bit are on (see
+# configs/star_t5_large.yaml). bitsandbytes is CUDA-only.
+# peft>=0.11
+# bitsandbytes>=0.43
