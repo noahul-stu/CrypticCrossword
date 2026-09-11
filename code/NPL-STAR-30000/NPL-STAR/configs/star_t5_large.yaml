@@ -1,0 +1,58 @@
+# flan-t5-large (780M) - the headline run for the report.
+#
+# Size matters for the comparison: the Cryptonite paper's 7.64% baseline is
+# T5-Large, so this is the configuration whose EM is directly comparable.
+#
+#   python -m cryptic_star.star_loop -c configs/base.yaml -c configs/star_t5_large.yaml
+#
+# Needs ~24GB for full fine-tuning at this batch size. On a smaller card either
+# drop batch_size to 2 and raise grad_accum to 16, or switch on the LoRA block
+# at the bottom.
+
+train:
+  model_name: google/flan-t5-large
+  learning_rate: 5.0e-5       # lower than base: large T5 diverges at 1e-4
+  epochs: 3.0
+  batch_size: 4
+  grad_accum: 8
+  bf16: true                  # ignored automatically when CUDA is absent
+  gradient_checkpointing: true
+  # If this OOMs on the GPU you are given, switch the optimizer before you touch
+  # the batch size. AdamW keeps two fp32 moments per parameter, ~6GB of state for
+  # 780M params; adafactor factors the second moment away. That is also the
+  # recipe the Cryptonite paper used for its T5 baseline, so it is a defensible
+  # comparison and not just a memory workaround:
+  #
+  #   optim: adafactor
+  #   learning_rate: 1.0e-3
+  #   lr_scheduler_type: constant
+  #
+  # Only then fall back to batch_size 2 / grad_accum 16, or the QLoRA block
+  # below. Note adafactor changes the optimizer, so quote it in the write-up.
+
+generate:
+  n_samples: 20        # top of the proposal's 5-20 range
+  batch_size: 8
+  temperature: 1.0     # 20 samples need more spread or they collapse to one trace
+
+data:
+  train_subsample: 30000
+
+star:
+  iterations: 4
+  out_dir: runs/t5large_star
+
+eval:
+  split: test
+  limit: null                 # full test split for the final number
+  num_beams: 4
+  batch_size: 8
+
+# --- QLoRA fallback for a memory-constrained GPU ------------------------
+# Uncomment together; needs peft + bitsandbytes.
+# train:
+#   use_lora: true
+#   load_in_4bit: true
+#   lora_r: 16
+#   lora_alpha: 32
+#   learning_rate: 3.0e-4     # LoRA wants a higher LR than full fine-tuning
