@@ -1,0 +1,23 @@
+# flan-t5-base (250M). Fits on one mid-range GPU; also runnable (slowly) on an
+# Apple-silicon Mac. Use this to get the loop working and to sanity-check that
+# EM moves across iterations before spending the large-model budget.
+#
+#   python -m cryptic_star.star_loop -c configs/base.yaml -c configs/star_t5_base.yaml
+
+train:
+  model_name: google/flan-t5-base
+  learning_rate: 1.0e-4
+  epochs: 3.0
+  batch_size: 8
+  grad_accum: 4
+
+generate:
+  n_samples: 10        # middle of the proposal's 5-20 range
+  batch_size: 16
+
+data:
+  train_subsample: 9000
+
+star:
+  iterations: 3
+  out_dir: runs/t5base_star

@@ -1,0 +1,122 @@
+# Defaults for every run. Override with a second -c file, never edit this one
+# for a single experiment (it is the reproducibility baseline).
+
+device: auto          # cuda -> mps -> cpu
+log_level: INFO
+
+data:
+  # united   = united-cryptonite-wordplay-dataset (Cryptonite + wordplay already
+  #            joined, one file per split). This is what the project uses.
+  # separate = raw Cryptonite + raw mdda/cryptic-wordplay, joined by align.py.
+  dataset: united
+
+  # --- dataset: united ----------------------------------------------------
+  # Directory holding train.jsonl.gz / val.jsonl.gz / test.jsonl.gz + stats.json
+  united_dir: data/raw/united-cryptonite-wordplay-dataset
+  # The united dataset does not check answer-disjointness itself. Leave this on:
+  # off, an answer can sit in both train and test and every number is inflated.
+  enforce_answer_split: true
+  drop_quick: true                  # Quick puzzles have no wordplay to learn
+  min_wordplay_chars: 8             # shorter than this is not an explanation
+  drop_label_only_rationales: false # "Double Definition" with no decomposition
+
+  # --- dataset: separate --------------------------------------------------
+  cryptonite_dir: data/raw/cryptonite/cryptonite-official-split
+  wordplay_file: data/raw/wordplay/wordplay.jsonl
+  fuzzy_threshold: 0.8        # clue-token Jaccard for the fallback match
+  use_unmatched_seed: true    # keep wordplay rows with no Cryptonite twin
+
+  # --- both ---------------------------------------------------------------
+  processed_dir: data/processed
+  train_subsample: 9000       # clues sampled per STaR iteration
+  limit_train: null           # row caps, for smoke tests
+  limit_val: null
+  limit_test: null
+
+format:
+  spaced_answer: true         # "P I P E" - one token per letter
+  include_definition: true    # target starts with the definition span
+  include_letter_count: true
+  max_source_len: 96
+  max_target_len: 128
+
+generate:
+  # Reasoning options sampled per clue (the proposal's "5-20 candidates").
+  # 10 is the middle of that range; star_t5_large.yaml raises it to 20.
+  # Cost scales linearly: n_samples x train_subsample generations per iteration.
+  n_samples: 10
+  temperature: 0.9    # needs to be high enough that the 10 samples actually differ
+  top_p: 0.95
+  top_k: 0
+  max_new_tokens: 128
+  batch_size: 16
+  dedup: true         # identical traces collapse; distinct reasonings are all kept
+
+verify:
+  require_reasoning: true     # right answer + empty reasoning is not accepted
+  min_wordplay_chars: 8
+  # The Cryptonite 7.64% baseline scores against one gold answer, so accepting
+  # the dataset's alt_answers would make our EM non-comparable. Off; matches are
+  # still counted and reported as `alt_answer_rate`.
+  accept_alt_answers: false
+
+train:
+  model_name: google/flan-t5-base
+  learning_rate: 1.0e-4
+  epochs: 3.0
+  batch_size: 8
+  grad_accum: 4
+  weight_decay: 0.0
+  warmup_ratio: 0.03
+  label_smoothing: 0.0
+  bf16: false
+  fp16: false
+  gradient_checkpointing: false
+  use_lora: false
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  load_in_4bit: false
+  num_workers: 2
+
+star:
+  iterations: 3
+  retrain_from_base: true     # STaR retrains from the pretrained checkpoint
+  warm_start_on_seed: true    # iteration 0 = human wordplay rationales
+  rationalize: true           # second pass on failures, with the answer as hint
+  # 0 = feed the generator EVERY correct reasoning path for a clue, not just
+  # the first few. Set a positive number to cap it (see README: easy clues can
+  # dominate the training set at 0).
+  max_traces_per_clue: 0
+  # Collapse traces that differ only in punctuation/casing, so "all reasonings"
+  # means all *distinct* reasonings rather than near-duplicates.
+  normalized_dedup: true
+  accumulate_traces: true
+  out_dir: runs/default
+  seed: 13
+
+eval:
+  split: test
+  limit: 2000                 # null = the whole split
+  num_beams: 4
+  max_new_tokens: 128
+  batch_size: 16
+  report_pass_at_n: true
+
+discriminator:
+  out_file: discriminator_data.jsonl
+  negatives_per_positive: 3
+  strict_negatives: true
+
+tracking:
+  # File-based on purpose: cluster compute nodes have no outbound network, so a
+  # tracker that phones home (Weights & Biases) would stall the job. See
+  # tracking.py. Everything lands under star.out_dir.
+  enabled: true
+  metrics_file: metrics.jsonl  # append-only event stream; tail -f it on the node
+  tensorboard: true            # tensorboard --logdir runs/<name>/tb
+  tb_dir: tb
+  log_steps: 25                # Trainer logging cadence, in optimizer steps
+  # Solved and failed reasoning traces per iteration -> iterK/trace_samples.md.
+  # The EM number says whether the loop works; these say how. 0 disables.
+  trace_samples: 15
