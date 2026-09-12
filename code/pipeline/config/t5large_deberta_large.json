@@ -1,0 +1,61 @@
+// THE REAL CONFIGURATION. This is the default.
+//
+//   python code/pipeline/run_pipeline.py --split test --limit 1000
+//
+// Generator: hugTAU/cryptonite-flant5-large (flan-t5-large fine-tuned on Cryptonite).
+// Scorer:    the fine-tuned deberta-v3-LARGE reasoning scorer, verified 2026-09-12:
+//            435.1M params, 24 layers, hidden 1024, classifier [2, 1024],
+//            id2label {0: INCORRECT, 1: CORRECT}, fp32.
+{
+  "extends": "default",
+
+  "generator": {
+    // Preference list, first existing local directory wins, hub id last -- so
+    // one config serves both the cluster and a laptop. To cache it locally and
+    // avoid re-downloading ~3GB per job:
+    //
+    //   python -c "from transformers import AutoModelForSeq2SeqLM, AutoTokenizer as T; \
+    //     p='hugTAU/cryptonite-flant5-large'; d='$STORAGE_ROOT/models/cryptonite-flant5-large'; \
+    //     AutoModelForSeq2SeqLM.from_pretrained(p).save_pretrained(d); T.from_pretrained(p).save_pretrained(d)"
+    "model": "{storage}/models/cryptonite-flant5-large;{repo}/my_local_model;hugTAU/cryptonite-flant5-large",
+    "num_candidates": 12,
+    "batch_size": 8
+  },
+
+  "scorer": {
+    // The checkpoint as delivered, in the repo. {storage} is tried first so the
+    // cluster can use a copy on course storage instead of a repo checkout.
+    //
+    // NOTE there is deliberately NO fallback to a bare `microsoft/deberta-v3-*`
+    // here. A base model loads fine but has a randomly initialized head, so its
+    // scores are noise and the resulting accuracy table is void. Now that a real
+    // checkpoint exists, a missing one should be a hard failure, not a quiet
+    // downgrade to nonsense.
+    "model": "{storage}/models/trained_deberta;{repo}/code/deberta/with-finetuning/trained_deberta",
+
+    // deberta-v3-large is 4.5x the parameters of small, and it shares the GPU
+    // with flan-t5-large during a stage="all" run. 32 was sized for small; drop
+    // to 8 if a card OOMs.
+    "batch_size": 16,
+
+    // fp32, matching the checkpoint's own dtype and how it was trained. Not
+    // `auto`: auto would load bf16 on CUDA, and bf16 rounding can reorder
+    // near-tied candidates, which is exactly the comparison this model exists to
+    // make. The 0.9GB saved is not worth perturbing the ranking.
+    "dtype": "float32",
+
+    // MUST match the fine-tuning setup. 256 is what
+    // DeBERTa_small_Wordplay_Reasoning_Scorer_with_finetuning.ipynb used
+    // (MAX_LENGTH). Never raise it above 512 -- the checkpoint only has 512
+    // position embeddings, and the tokenizer_config ships the "unlimited"
+    // model_max_length sentinel, so nothing else would stop you.
+    "max_length": 256
+
+    // `template` and `positive_label` are inherited from default.json:
+    //   "CLUE: {clue}\nANSWER: {answer}\nREASONING: {reason}"  and  null
+    // The template must match what the scorer was trained on, and the null
+    // positive_label reads the positive class off this checkpoint's own
+    // label2id (CORRECT -> 1). Verify both with:
+    //   python code/pipeline/run_pipeline.py --verify-scorer 200
+  }
+}

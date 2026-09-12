@@ -1,0 +1,133 @@
+// Base config. Every other config `extends` this and overrides what it needs,
+// so a change to a shared default lands everywhere at once.
+//
+// Only FULL-LINE // comments are stripped by the loader. A trailing comment on a
+// value line is a JSON syntax error.
+{
+  // ---------------------------------------------------------------- stage 1
+  "generator": {
+    "kind": "seq2seq",
+
+    // `;`-separated preference list: first local directory that exists wins,
+    // hub id last. One config therefore serves the cluster and a laptop.
+    "model": "microsoft/flan-t5-small",
+
+    // The fine-tuned Cryptonite checkpoint was trained on the bare clue text
+    // (train_cryptonite.py: `inputs = examples["clue"]`), and the clue already
+    // has its enumeration appended inline. Adding an instruction prefix here
+    // would push the input off the distribution it was fine-tuned on, which
+    // costs accuracy silently. Change this only for an instruction-tuned model.
+    "prompt": "{clue}",
+
+    // How many candidates to rerank. The user-facing knob: 5-20 is the useful
+    // range. More candidates raises oracle@k (the ceiling) but costs generation
+    // time linearly and gives the scorer more chances to pick a wrong one.
+    "num_candidates": 12,
+
+    // beam_sample_union: one beam pass, then one sampling pass, merged.
+    //
+    // The two things this pipeline needs from decoding are in tension. The
+    // BASELINE must be what a plain T5 would return, which means beam search.
+    // The CANDIDATE POOL must be diverse, or the reranker has nothing to rerank
+    // -- and beam search is bad at that, because its beams share prefixes and
+    // return k near-identical variants of one guess. Running the two as separate
+    // passes gets both: beam decodes come first so the pool's rank 0 is the true
+    // beam top-1, and the sampling pass adds answers beam search would never
+    // surface.
+    //
+    // This also sidesteps a hard blocker: transformers 5 REMOVED group/diverse
+    // beam search from core (it now needs trust_remote_code plus a live route to
+    // hf.co at generation time, which a compute node may not have). Setting
+    // strategy="diverse_beam" on transformers >= 5 raises with instructions
+    // rather than failing mid-job.
+    //
+    // Alternatives: "beam" (baseline only, poor oracle@k) · "sample" (diverse,
+    // noisy, and no well-defined top-1 baseline) · "diverse_beam" (needs
+    // allow_remote_code on transformers >= 5).
+    "strategy": "beam_sample_union",
+
+    // How many of num_candidates come from the beam pass; the rest are sampled.
+    // Default is half, rounded up.
+    "beam_candidates": 6,
+
+    // Sampling-pass knobs. Higher top_p / temperature buys diversity (a higher
+    // oracle@k ceiling) at the cost of more obvious junk for the scorer to reject.
+    "top_p": 0.95,
+    "temperature": 1.0,
+
+    // Only used by strategy="diverse_beam".
+    "num_beam_groups": 6,
+    "diversity_penalty": 0.7,
+    "allow_remote_code": false,
+
+    "max_input_tokens": 128,
+    "max_new_tokens": 64,
+    "batch_size": 8,
+    "dtype": "auto",
+
+    // How to split one decode into (answer, reason). Patterns are tried in
+    // order and need named groups `answer` and `reason`; the first that matches
+    // with a non-empty answer wins. When none match, `fallback` applies.
+    //
+    // Run `--probe 5` against a new checkpoint BEFORE trusting these: a wrong
+    // pattern does not raise, it silently produces empty reasons.
+    "parse": {
+      "patterns": [
+        "(?is)^\\s*answer\\s*[:\\-]\\s*(?P<answer>.*?)\\s*(?:\\||\\n|;)\\s*(?:reason(?:ing)?|wordplay|explanation)\\s*[:\\-]\\s*(?P<reason>.+)$",
+        "(?is)^\\s*(?P<answer>[^|\\n]{1,40}?)\\s*\\|\\s*(?P<reason>.+)$",
+        "(?is)^\\s*(?P<answer>[^:\\n]{1,40}?)\\s*::\\s*(?P<reason>.+)$"
+      ],
+      // answer_only: the whole decode is the answer, reason "". Correct for a
+      // clue->answer checkpoint, and the safe default -- the scorer still gets
+      // a valid (clue, answer) pair to rank.
+      "fallback": "answer_only",
+      // Seq2seq models echo the enumeration from the prompt. Left in place it
+      // breaks both the length filter and exact match.
+      "strip_enumeration": true
+    }
+  },
+
+  // ---------------------------------------------------------------- stage 2
+  "scorer": {
+    "kind": "sequence_classification",
+    "model": "microsoft/deberta-v3-small",
+
+    // MUST match the template the scorer was fine-tuned with -- see
+    // `format_input` in DeBERTa_small_Wordplay_Reasoning_Scorer_with_finetuning
+    // .ipynb. A scorer fed a layout it never saw returns confident nonsense
+    // rather than an error.
+    "template": "CLUE: {clue}\nANSWER: {answer}\nREASONING: {reason}",
+
+    // null => read the positive class off the checkpoint's own label2id, so a
+    // future scorer trained with the labels reversed does not silently invert
+    // the ranking. Set to "CORRECT" or an int to force it.
+    "positive_label": null,
+
+    "max_length": 256,
+    "batch_size": 32,
+    "dtype": "auto"
+  },
+
+  // ---------------------------------------------------------------- stage 1b
+  // Model-free filters. Free accuracy: an answer of the wrong length cannot fit
+  // the grid, so it cannot be right.
+  "filters": {
+    "enumeration": true,
+    "min_answer_chars": 2,
+    "max_answer_chars": 40
+  },
+
+  // ---------------------------------------------------------------- stage 3
+  "selection": {
+    // scorer    | the pipeline as designed: argmax of P(correct)
+    // weighted  | blend with the generator's own confidence
+    // generator | ablation -- reproduces the baseline through the same code
+    "combine": "scorer",
+    "scorer_weight": 0.7
+  },
+
+  // Clues per generate/score/write cycle. Also the resume granularity: a
+  // preempted job loses at most this many clues.
+  "chunk_size": 32,
+  "device": "auto"
+}

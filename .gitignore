@@ -28,6 +28,11 @@ venv/
 env/
 ENV/
 
+# Caches redirected off $HOME. On the cluster these land on course storage; on a
+# laptop paths.setup_environment() falls back to the repo root, so the repo gets
+# a .cache/ holding HF model weights. Never commit it.
+.cache/
+
 # ------------------------------------------------------------ ML run artifacts
 checkpoints/
 runs/
@@ -43,6 +48,18 @@ slurm_logs/*
 *.ckpt
 *.pt
 *.safetensors
+
+# Downloaded / fine-tuned checkpoints dropped in by hand. Hundreds of MB to
+# several GB each, over GitHub's 100 MB per-file limit. models/README.md says
+# what belongs there and stays tracked.
+models/*
+!models/README.md
+
+# The delivered fine-tuned scorer (deberta-v3-large, 1.74GB). *.safetensors above
+# already blocks the weights, but config.json / tokenizer.json / training_args.bin
+# would still commit -- leaving a weightless, unloadable checkpoint in git history
+# that looks valid until someone tries to use it. Ignore the whole directory.
+code/deberta/with-finetuning/trained_deberta/
 
 # ------------------------------------------- Uncompressed dataset splits (BIG)
 # The dataset ships gzipped. Plain train.jsonl is 205 MB, over GitHub's 100 MB

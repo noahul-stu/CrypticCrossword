@@ -1,0 +1,27 @@
+// Fast plumbing check. Tiny public models, no fine-tuned checkpoints, runs on a
+// laptop CPU in about a minute:
+//
+//   python code/pipeline/run_pipeline.py --config smoke --split val --limit 8
+//
+// This verifies the wiring only. The scorer is an untrained base model with a
+// randomly initialized classification head, so its scores are NOISE -- expect
+// the pipeline to land near the random-from-candidates floor, and never report
+// accuracy from this config.
+{
+  "extends": "default",
+
+  "generator": {
+    "model": "google/flan-t5-small",
+    "num_candidates": 6,
+    "num_beam_groups": 3,
+    "batch_size": 4,
+    "max_new_tokens": 24
+  },
+
+  "scorer": {
+    "model": "microsoft/deberta-v3-small",
+    "batch_size": 16
+  },
+
+  "chunk_size": 8
+}
